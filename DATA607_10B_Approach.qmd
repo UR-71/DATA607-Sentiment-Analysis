@@ -1,0 +1,27 @@
+---
+title: "Assignment 10B: More JSON Practice - Approach"
+author: "Ummay Rukiya"
+format: html
+editor: visual
+---
+
+## Overview
+
+For this assignment, I will use JSON data from the Nobel Prize API to explore how prizes have been awarded across categories and over time. I am especially interested in whether prize sharing has become more common and how far laureates’ award affiliations were from their countries of birth.
+
+## Research Questions
+
+1.  Which Nobel Prize categories have the highest share of prizes awarded to more than one recipient?
+2.  For each category, how did the average number of recipients per prize change between 1950–1979 and 1990–2019?
+3.  Who were the youngest individual laureates in each category, based on their age when the prize was awarded?
+4.  Among individual laureates with one recorded affiliation country at the time of the award, which prize categories had the highest percentage of awards where that country differed from the laureate’s birth country?
+
+## Planned Approach
+
+I will retrieve prize and laureate records from the Nobel Prize API and parse the JSON in R. Because one prize can have multiple recipients and one person can receive multiple prizes, I will create a table with one row per prize and another with one row per recipient per prize. I will use the laureate ID to connect individual recipients to their birth information.
+
+For the first two questions, I will count recipients for each prize and summarize those counts by category and time period. I will count both people and organizations as recipients for those questions. For the third question, I will calculate age only when both a complete birth date and an award date are available. For the fourth question, I will compare birth country with award affiliation country. I will report how many records were excluded because of missing or multiple affiliation countries. An affiliation country identifies where an institution is located; it does not establish citizenship.
+
+## Expected Output
+
+The final Quarto report will show the R code and a table or chart answering each question. I will document any exclusions so readers can see which records each result represents.
