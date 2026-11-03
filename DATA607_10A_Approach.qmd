@@ -1,0 +1,19 @@
+---
+title: "Sentiment Analysis with Text Mining in R: Approach"
+author: "Ummay Rukiya"
+format: html
+---
+
+## Overview
+
+For this assignment, I will reproduce the Jane Austen sentiment analysis from Section 2.2 of Julia Silge and David Robinson’s [*Text Mining with R*](https://www.tidytextmining.com/sentiment#sentiment-analysis-with-inner-join). Then I will use the same method on Lewis Carroll’s *Alice’s Adventures in Wonderland* to see how the sentiment patterns compare.
+
+## Planned Approach
+
+First, I will use the chapter’s original R code to split the Jane Austen novels into individual words and match them to the Bing sentiment lexicon. For each 80-line section, I will subtract the number of negative words from the number of positive words and plot the results. I will cite the book and credit the original example in my report.
+
+Next, I will apply the Bing method to *Alice’s Adventures in Wonderland*. I will also score the same passages using the Loughran–McDonald lexicon, which was designed for financial text. Using Bing on both sets of texts will help me compare the stories, while using both lexicons on Alice will help me see how the choice of dictionary affects the results.
+
+## What I Will Compare
+
+I will look for passages where the scores rise or fall and check how many words each dictionary recognizes. I will also examine a few passages where the dictionaries disagree. Because this method scores words individually, it can miss context such as negation or sarcasm, so I will treat the scores as clues about the text’s tone.
