@@ -1,0 +1,288 @@
+---
+title: "Assignment 10B: More JSON Practice — Nobel Prizes"
+author: "Ummay Rukiya"
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+---
+
+## Overview
+
+For this assignment, I wanted to see what the Nobel Prize data could tell me beyond who won. I looked at how often prizes were shared, whether that changed over time, who the youngest winners were, and how often winners were affiliated with an institution in a different country from where they were born.
+
+## Loading the JSON Data
+
+I used two endpoints from the [Nobel Prize API (version 2.1)](https://www.nobelprize.org/about/developer-zone-2/). The prizes endpoint gives me the award year, category, award date, and recipients. The laureates endpoint gives me birth information and affiliations recorded for each award. I requested up to 1,500 records from each endpoint and checked the number returned against the total reported by the API. The results reflect the data available when this report was rendered.
+
+```{r}
+#| label: load-data
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(knitr)
+
+prizes_url <- "https://api.nobelprize.org/2.1/nobelPrizes?limit=1500"
+laureates_url <- "https://api.nobelprize.org/2.1/laureates?limit=1500"
+
+read_nobel_json <- function(url) {
+  json_file <- tempfile(fileext = ".json")
+  on.exit(unlink(json_file))
+  download.file(url, json_file, mode = "wb", quiet = TRUE)
+  fromJSON(json_file, simplifyVector = FALSE)
+}
+
+prizes_json <- read_nobel_json(prizes_url)
+laureates_json <- read_nobel_json(laureates_url)
+
+stopifnot(
+  length(prizes_json$nobelPrizes) == prizes_json$meta$count,
+  length(laureates_json$laureates) == laureates_json$meta$count
+)
+```
+
+## Preparing the Data
+
+I kept two levels of detail. For the sharing questions, I needed one row per awarded prize. For the age and country questions, I needed one row per recipient per award, since some people received more than one prize. I left out category and year entries that had no recipients when counting awarded prizes.
+
+```{r}
+#| label: prepare-prizes
+prizes <- map_dfr(prizes_json$nobelPrizes, function(prize) {
+  tibble(
+    year = as.integer(prize$awardYear),
+    category = prize$category$en,
+    award_date = if (is.null(prize$dateAwarded)) NA_character_ else prize$dateAwarded,
+    recipient_count = length(prize$laureates),
+    laureate_ids = list(map_chr(prize$laureates, "id"))
+  )
+}) |>
+  filter(recipient_count > 0)
+
+prize_recipients <- prizes |>
+  unnest_longer(laureate_ids, values_to = "laureate_id") |>
+  select(laureate_id, year, category, award_date)
+```
+
+For country names, I used the API's present-day country label when available and the recorded country label otherwise. This helps with some historical name differences. I removed duplicate affiliation countries within each award, so two institutions in the same country still count as one country. I kept organizations in the prize-sharing analysis but used only people for the age and country questions.
+
+```{r}
+#| label: prepare-laureates
+text_or_na <- function(value) {
+  if (is.null(value) || !nzchar(trimws(value))) {
+    return(NA_character_)
+  }
+  trimws(value)
+}
+
+country_name <- function(place) {
+  coalesce(
+    text_or_na(place$countryNow$en),
+    text_or_na(place$country$en)
+  )
+}
+
+individuals <- keep(laureates_json$laureates, function(person) {
+  is.null(person$orgName)
+})
+
+individual_awards <- map_dfr(individuals, function(person) {
+  map_dfr(person$nobelPrizes, function(award) {
+    countries <- map_chr(award$affiliations, country_name)
+    recorded_countries <- unique(countries[!is.na(countries)])
+
+    tibble(
+      laureate_id = person$id,
+      laureate_name = coalesce(
+        text_or_na(person$knownName$en),
+        text_or_na(person$fullName$en)
+      ),
+      year = as.integer(award$awardYear),
+      category = award$category$en,
+      birth_date = text_or_na(person$birth$date),
+      birth_country = country_name(person$birth$place),
+      affiliation_country_count = length(recorded_countries),
+      affiliation_country = if (length(recorded_countries) == 1) {
+        recorded_countries[1]
+      } else {
+        NA_character_
+      }
+    )
+  })
+})
+
+# Use the recipient ID, year, and category to match the correct award.
+award_keys <- c("laureate_id", "year", "category")
+stopifnot(
+  !anyDuplicated(individual_awards[award_keys]),
+  !anyDuplicated(prize_recipients[award_keys]),
+  nrow(anti_join(individual_awards, prize_recipients, by = award_keys)) == 0
+)
+
+individual_awards <- individual_awards |>
+  left_join(prize_recipients, by = award_keys)
+```
+
+## Question 1: Which categories have the highest share of prizes shared by multiple recipients?
+
+I counted each awarded prize once and marked it as shared when it had more than one recipient. I divided the number of shared prizes by the total number of awarded prizes in that category.
+
+```{r}
+#| label: shared-prizes
+shared_prizes <- prizes |>
+  group_by(category) |>
+  summarize(
+    awarded_prizes = n(),
+    shared_prizes = sum(recipient_count > 1),
+    shared_percent = 100 * shared_prizes / awarded_prizes,
+    .groups = "drop"
+  ) |>
+  arrange(desc(shared_percent))
+
+kable(
+  shared_prizes,
+  col.names = c("Category", "Awarded prizes", "Shared prizes", "Shared (%)"),
+  digits = 1
+)
+```
+
+`r shared_prizes$category[1]` had the highest share: `r shared_prizes$shared_prizes[1]` out of `r shared_prizes$awarded_prizes[1]` awarded prizes were shared (`r round(shared_prizes$shared_percent[1], 1)`%). I used percentages because the categories do not all have the same number of awarded prizes.
+
+## Question 2: How did the average number of recipients per prize change between the two periods?
+
+I compared 1950–1979 with 1990–2019. For each category, I averaged the number of recipients per awarded prize in each period. I subtracted the earlier average from the later one, so a positive number means that prizes had more recipients on average in the later period.
+
+```{r}
+#| label: recipients-over-time
+period_comparison <- prizes |>
+  mutate(
+    period = case_when(
+      between(year, 1950, 1979) ~ "early",
+      between(year, 1990, 2019) ~ "later"
+    )
+  ) |>
+  filter(!is.na(period)) |>
+  group_by(category, period) |>
+  summarize(
+    prizes = n(),
+    average_recipients = mean(recipient_count),
+    .groups = "drop"
+  ) |>
+  pivot_wider(
+    names_from = period,
+    values_from = c(prizes, average_recipients)
+  ) |>
+  mutate(change = average_recipients_later - average_recipients_early) |>
+  select(
+    category, prizes_early, average_recipients_early,
+    prizes_later, average_recipients_later, change
+  ) |>
+  arrange(desc(change))
+
+kable(
+  period_comparison,
+  col.names = c(
+    "Category", "Prizes (1950–79)", "Avg. recipients (1950–79)",
+    "Prizes (1990–2019)", "Avg. recipients (1990–2019)", "Change"
+  ),
+  digits = 2
+)
+```
+
+The biggest increase was in `r period_comparison$category[1]`, where the average went from `r round(period_comparison$average_recipients_early[1], 2)` to `r round(period_comparison$average_recipients_later[1], 2)` recipients per prize. Economic Sciences first appears in the API in 1969, so its earlier average covers fewer years.
+
+## Question 3: Who was the youngest individual laureate in each category?
+
+I used the full birth date and the date the API records for the award, rather than subtracting the two years. I left out incomplete dates, such as dates with a month or day of zero. I ranked by age in days and kept exact ties. The table shows age in completed years as well as days.
+
+```{r}
+#| label: youngest-laureates
+parse_full_date <- function(value) {
+  full_date <- grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", value)
+  value[!full_date] <- NA_character_
+  as.Date(value, format = "%Y-%m-%d")
+}
+
+ages <- individual_awards |>
+  mutate(
+    birth_date = parse_full_date(birth_date),
+    award_date = parse_full_date(award_date),
+    age_days = as.integer(award_date - birth_date)
+  ) |>
+  filter(!is.na(age_days), age_days >= 0) |>
+  mutate(
+    age_years = as.integer(format(award_date, "%Y")) -
+      as.integer(format(birth_date, "%Y")) -
+      as.integer(format(award_date, "%m%d") < format(birth_date, "%m%d"))
+  )
+
+youngest <- ages |>
+  group_by(category) |>
+  slice_min(age_days, n = 1, with_ties = TRUE) |>
+  ungroup() |>
+  arrange(age_days) |>
+  select(category, laureate_name, birth_date, award_date, age_years, age_days)
+
+kable(
+  youngest,
+  col.names = c(
+    "Category", "Laureate", "Birth date", "Award date", "Age (years)", "Age (days)"
+  )
+)
+```
+
+The youngest person across the categories was `r youngest$laureate_name[1]`, who was `r youngest$age_years[1]` when awarded the prize in `r youngest$category[1]`. The age comparison excluded `r nrow(individual_awards) - nrow(ages)` individual award records without a usable pair of dates.
+
+## Question 4: In which categories did birth and award affiliation countries differ most often?
+
+For this question, I compared birth country with the country of the affiliation listed for that specific award. I included individual award records with a known birth country and exactly one distinct recorded affiliation country. I excluded records with no recorded affiliation country, more than one, or no birth country. If a record met more than one exclusion rule, I counted it under the first reason shown in the code. This measures differences in recorded locations; it does not tell me anyone's citizenship or whether they moved.
+
+```{r}
+#| label: compare-countries
+country_comparison <- individual_awards |>
+  mutate(
+    status = case_when(
+      is.na(birth_country) ~ "Missing birth country",
+      affiliation_country_count == 0 ~ "No affiliation country",
+      affiliation_country_count > 1 ~ "Multiple affiliation countries",
+      birth_country == affiliation_country ~ "Same country",
+      TRUE ~ "Different country"
+    )
+  ) |>
+  group_by(category) |>
+  summarize(
+    missing_birth = sum(status == "Missing birth country"),
+    no_affiliation = sum(status == "No affiliation country"),
+    multiple_affiliations = sum(status == "Multiple affiliation countries"),
+    eligible = sum(status %in% c("Same country", "Different country")),
+    different_country = sum(status == "Different country"),
+    .groups = "drop"
+  ) |>
+  mutate(
+    different_percent = if_else(
+      eligible > 0, 100 * different_country / eligible, NA_real_
+    )
+  ) |>
+  arrange(desc(different_percent))
+
+kable(
+  country_comparison,
+  col.names = c(
+    "Category", "Missing birth country", "No affiliation country",
+    "Multiple affiliation countries", "Eligible awards",
+    "Different country", "Different country (%)"
+  ),
+  digits = 1
+)
+```
+
+Among the records I could compare, `r country_comparison$category[1]` had the highest percentage: `r country_comparison$different_country[1]` of `r country_comparison$eligible[1]` individual award records (`r round(country_comparison$different_percent[1], 1)`%). The number of eligible records varied across categories, so I would interpret this ranking alongside the exclusions in the table. A category with zero eligible records has no percentage to report.
+
+## Conclusion
+
+What stood out to me was how the unit of analysis changed depending on the question. For sharing, I counted each prize once. For age and affiliation, I looked at each person's record for a specific award. Keeping those separate helped me avoid counting shared prizes more than once or using an affiliation from the wrong award.
+
+## Sources and AI Use
+
+- Nobel Prize Outreach. [Nobel Prize API Developer Zone](https://www.nobelprize.org/about/developer-zone-2/). API v2.1: [Nobel prizes](https://api.nobelprize.org/2.1/nobelPrizes?limit=1500) and [laureates](https://api.nobelprize.org/2.1/laureates?limit=1500).
